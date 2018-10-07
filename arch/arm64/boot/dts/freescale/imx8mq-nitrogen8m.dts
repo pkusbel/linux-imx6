@@ -611,7 +611,7 @@
 		model = "imx-audio-hdmi";
 		audio-cpu = <&sai4>;
 		protocol = <1>;
-		status = "okay";
+		status = "disabled";//@19labs change:  disable HDMI audio
 	};
 };
 
