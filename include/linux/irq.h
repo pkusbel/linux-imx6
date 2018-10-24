@@ -732,6 +732,10 @@ unsigned int arch_dynirq_lower_bound(unsigned int from);
 int __irq_alloc_descs(int irq, unsigned int from, unsigned int cnt, int node,
 		      struct module *owner, const struct cpumask *affinity);
 
+int __devm_irq_alloc_descs(struct device *dev, int irq, unsigned int from,
+			   unsigned int cnt, int node, struct module *owner,
+			   const struct cpumask *affinity);
+
 /* use macros to avoid needing export.h for THIS_MODULE */
 #define irq_alloc_descs(irq, from, cnt, node)	\
 	__irq_alloc_descs(irq, from, cnt, node, THIS_MODULE, NULL)
@@ -747,6 +751,21 @@ int __irq_alloc_descs(int irq, unsigned int from, unsigned int cnt, int node,
 
 #define irq_alloc_descs_from(from, cnt, node)	\
 	irq_alloc_descs(-1, from, cnt, node)
+
+#define devm_irq_alloc_descs(dev, irq, from, cnt, node)		\
+	__devm_irq_alloc_descs(dev, irq, from, cnt, node, THIS_MODULE, NULL)
+
+#define devm_irq_alloc_desc(dev, node)				\
+	devm_irq_alloc_descs(dev, -1, 0, 1, node)
+
+#define devm_irq_alloc_desc_at(dev, at, node)			\
+	devm_irq_alloc_descs(dev, at, at, 1, node)
+
+#define devm_irq_alloc_desc_from(dev, from, node)		\
+	devm_irq_alloc_descs(dev, -1, from, 1, node)
+
+#define devm_irq_alloc_descs_from(dev, from, cnt, node)		\
+	devm_irq_alloc_descs(dev, -1, from, cnt, node)
 
 void irq_free_descs(unsigned int irq, unsigned int cnt);
 static inline void irq_free_desc(unsigned int irq)
@@ -931,6 +950,14 @@ void irq_setup_generic_chip(struct irq_chip_generic *gc, u32 msk,
 int irq_setup_alt_chip(struct irq_data *d, unsigned int type);
 void irq_remove_generic_chip(struct irq_chip_generic *gc, u32 msk,
 			     unsigned int clr, unsigned int set);
+
+struct irq_chip_generic *
+devm_irq_alloc_generic_chip(struct device *dev, const char *name, int num_ct,
+			    unsigned int irq_base, void __iomem *reg_base,
+			    irq_flow_handler_t handler);
+int devm_irq_setup_generic_chip(struct device *dev, struct irq_chip_generic *gc,
+				u32 msk, enum irq_gc_flags flags,
+				unsigned int clr, unsigned int set);
 
 struct irq_chip_generic *irq_get_domain_generic_chip(struct irq_domain *d, unsigned int hw_irq);
 

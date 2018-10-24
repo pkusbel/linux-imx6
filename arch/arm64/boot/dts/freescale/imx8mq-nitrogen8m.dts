@@ -7,7 +7,6 @@
 
 #include "fsl-imx8mq.dtsi"
 #include "panel-ltk080a60a004t.dtsi"
-#include "panel-osd050t3236.dtsi"
 
 &iomuxc {
 	pinctrl-names = "default";
@@ -28,7 +27,8 @@
 	pinctrl_ecspi2: ecspi2grp {
 		fsl,pins = <
 			/* J17 */
-			MX8MQ_IOMUXC_ECSPI2_SS0_ECSPI2_SS0		0x19	/* Pin 1 */
+#define GP_ECSPI2_CS0	<&gpio5 13 GPIO_ACTIVE_LOW>
+			MX8MQ_IOMUXC_ECSPI2_SS0_GPIO5_IO13		0x19	/* Pin 1 */
 			MX8MQ_IOMUXC_ECSPI2_MISO_ECSPI2_MISO		0x19	/* Pin 3 */
 			MX8MQ_IOMUXC_ECSPI2_SCLK_ECSPI2_SCLK		0x19	/* Pin 5 */
 			MX8MQ_IOMUXC_ECSPI2_MOSI_ECSPI2_MOSI		0x19	/* Pin 7 */
@@ -473,7 +473,9 @@
 		fb_hdmi = &hdmi;
 		gpio1 = &gpio1;
 		lcdif = &lcdif;
+		mipi = &fb_mipi;
 		mipi_cmds_ltk080a60a004t = &mipi_cmds_ltk080a60a004t;
+		mipi_cmds_m101nwwb = &mipi_cmds_ltk080a60a004t;		/* Same commands work for both */
 		mipi_dsi = &mipi_dsi;
 		mipi_dsi_bridge = &mipi_dsi_bridge;
 		mipi_dsi_phy = &mipi_dsi_phy;
@@ -610,6 +612,7 @@
 		compatible = "fsl,imx-audio-cdnhdmi";
 		model = "imx-audio-hdmi";
 		audio-cpu = <&sai4>;
+		constraint-rate = <32000 44100 48000 96000 192000>;
 		protocol = <1>;
 		status = "disabled";//@19labs change:  disable HDMI audio
 	};
@@ -662,7 +665,17 @@
 &ecspi2 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_ecspi2>;
+	fsl,spi-num-chipselects = <1>;
+	cs-gpios = GP_ECSPI2_CS0;
 	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	spidev@0 {
+		compatible = "spidev";
+		spi-max-frequency = <2000000>;
+		reg = <0>;
+	};
 };
 
 &fec1 {
@@ -1140,6 +1153,11 @@
 			<&clk IMX8MQ_CLK_SAI4_DIV>;
 	assigned-clock-parents = <&clk IMX8MQ_AUDIO_PLL1_OUT>;
 	assigned-clock-rates = <0>, <24576000>;
+	clocks = <&clk IMX8MQ_CLK_SAI4_IPG>, <&clk IMX8MQ_CLK_DUMMY>,
+		<&clk IMX8MQ_CLK_SAI4_ROOT>, <&clk IMX8MQ_CLK_DUMMY>,
+		<&clk IMX8MQ_CLK_DUMMY>, <&clk IMX8MQ_AUDIO_PLL1_OUT>,
+		<&clk IMX8MQ_AUDIO_PLL2_OUT>;
+	clock-names = "bus", "mclk0", "mclk1", "mclk2", "mclk3", "pll8k", "pll11k";
 	status = "okay";
 };
 
