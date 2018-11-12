@@ -475,12 +475,8 @@ static void dcss_plane_atomic_update(struct drm_plane *plane,
 	opipe_cfg.pr = PR_FULL;
 	opipe_cfg.g = G_REC2020;
 
-	#if 0
-	// @19labs:  hdr10 is broken, leave it off for now
 	dcss_hdr10_setup(dcss_plane->dcss, dcss_plane->ch_num,
 			 &ipipe_cfg, &opipe_cfg);
-
-	#endif //@19labs
 
 	dcss_dtg_plane_pos_set(dcss_plane->dcss, dcss_plane->ch_num,
 			       crtc.x1, crtc.y1,
