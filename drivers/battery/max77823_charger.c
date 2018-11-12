@@ -9,7 +9,7 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-
+#include <linux/kernel.h>
 #include <linux/mfd/max77823.h>
 #include <linux/mfd/max77823-private.h>
 #include <linux/debugfs.h>
@@ -17,6 +17,7 @@
 #include <linux/regulator/driver.h>
 #include <linux/regulator/of_regulator.h>
 #include <linux/seq_file.h>
+#include <linux/uaccess.h>
 //#include <linux/usb_notify.h>
 #include <linux/battery/charger/max77823_charger.h>
 #ifdef CONFIG_EXTCON_MAX77828
@@ -506,6 +507,16 @@ static int cvt_ilim_to_ma(int ilim)
 	return ma;
 }
 
+void max77823_set_vbypass(struct max77823_charger_data *charger, unsigned bypass_mv)
+{
+	unsigned val;
+
+	if ((bypass_mv < 3000) || (bypass_mv > 5750))
+		bypass_mv = 4875;
+	val = (bypass_mv - 3000) / 25;
+	max77823_write_reg(charger->i2c, MAX77823_CHG_CNFG_11, val);
+}
+
 static void max77823_set_chgin_ilim(struct max77823_charger_data *charger, unsigned ilim)
 {
 	charger->chgin_ilim = ilim;
@@ -521,10 +532,12 @@ static void max77823_set_desired_chgin_ilim(struct max77823_charger_data *charge
 	int ret;
 
 	charger->desired_chgin_ilim = ilim;
+	charger->initial_chgin_ilim = ilim;
 	if (psy) {
 		ret = psy_get_prop(charger, PS_USB_CHARGER, POWER_SUPPLY_PROP_CURRENT_MAX, &value);
 		if (!ret) {
 			ilim2 = convert_to_ilim(value.intval);
+			charger->usb_limit_chgin_ilim = ilim2;
 			pr_info("%s: ilim = 0x%x 0x%x\n", __func__, ilim, ilim2);
 			if (ilim > ilim2)
 				ilim = ilim2;
@@ -571,8 +584,17 @@ static void max77823_chg_cable_work(struct work_struct *work)
 				charger->current_checked = 0;
 			update_cable_type(charger);
 			ilim2 = convert_to_ilim(value.intval);
-			if (ilim > ilim2)
+			if (ilim > ilim2) {
 				ilim = ilim2;
+			} else {
+				if (ilim2 > charger->usb_limit_chgin_ilim) {
+					/* Type of cable has changed */
+					pr_debug("%s: cable has changed\n", __func__);
+					charger->desired_chgin_ilim = charger->initial_chgin_ilim;
+					charger->current_checked = 0;
+				}
+			}
+			charger->usb_limit_chgin_ilim = ilim2;
 		}
 	}
 	if (ilim != charger->chgin_ilim) {
@@ -1001,7 +1023,7 @@ static int max77823_chg_set_property(struct power_supply *psy,
 				current_now = usb_charging_current;
 
 			set_charging_current_max =
-				cvt_ilim_to_ma(charger->desired_chgin_ilim);
+				cvt_ilim_to_ma(charger->initial_chgin_ilim);
 			if (charger->cable_type == POWER_SUPPLY_TYPE_MAINS || \
 				charger->cable_type == POWER_SUPPLY_TYPE_HV_MAINS) {
 				limit_ma = SIOP_INPUT_LIMIT_CURRENT;
@@ -1046,6 +1068,42 @@ static int max77823_debugfs_show(struct seq_file *s, void *data)
 	return 0;
 }
 
+static ssize_t max77823_debugfs_reg_write(struct file *s, const char __user *ubuf,
+                               size_t cnt, loff_t *ppos)
+{
+	struct seq_file *m = s->private_data;
+	struct max77823_charger_data *charger = m->private;
+	char buf[100];
+	char *p = buf;
+	ssize_t st;
+	unsigned long reg;
+	unsigned long val;
+	int ret;
+
+	if (cnt > sizeof(buf) - 1)
+		return -EINVAL;
+	st = copy_from_user(p, ubuf, cnt);
+	if (st)
+		return st;
+	p[cnt] = 0;
+	reg = simple_strtoul(p, &p, 16);
+	while (*p == ' ') {
+		p++;
+		if (!*p)
+			return -EINVAL;
+	}
+	ret = kstrtoul(p, 16, &val);
+	if (ret)
+		return ret;
+	if ((reg > 0xff) | (val > 0xffff))
+		return -EINVAL;
+	ret = max77823_write_reg(charger->i2c, reg, val);
+	if (ret)
+		return ret;
+	*ppos += cnt;
+	return cnt;
+}
+
 static int max77823_debugfs_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, max77823_debugfs_show, inode->i_private);
@@ -1054,6 +1112,7 @@ static int max77823_debugfs_open(struct inode *inode, struct file *file)
 static const struct file_operations max77823_debugfs_fops = {
 	.open           = max77823_debugfs_open,
 	.read           = seq_read,
+	.write		= max77823_debugfs_reg_write,
 	.llseek         = seq_lseek,
 	.release        = single_release,
 };
@@ -1352,7 +1411,7 @@ static void max77823_chgin_isr_work(struct work_struct *work)
 					__func__, chgin_dtls, chg_dtls);
 			pr_info("%s: undervoltage->normal\n", __func__);
 			max77823_set_input_current(charger,
-					cvt_ilim_to_ma(charger->desired_chgin_ilim));
+					cvt_ilim_to_ma(charger->initial_chgin_ilim));
 		}
 	}
 	/* Have the battery reevaluate charging */
@@ -1415,9 +1474,7 @@ static int max77823_otg_enable(struct max77823_charger_data *charger)
 #ifdef CONFIG_EXTCON_MAX77828
 	max77828_muic_set_chgdeten(DISABLE);
 #endif
-	/* Update CHG_CNFG_11 to 0x54(5.1V) */
-	max77823_write_reg(charger->i2c,
-		MAX77823_CHG_CNFG_11, 0x54);
+	max77823_set_vbypass(charger, charger->pdata->bypass_mv);
 
 	/* OTG on, boost on */
 	max77823_update_reg(charger->i2c, MAX77823_CHG_CNFG_00,
@@ -1544,8 +1601,8 @@ static int parse_regulators_dt(struct device *dev, const struct device_node *np,
 
 	parent = of_get_child_by_name(np, "regulators");
 	if (!parent) {
-		dev_err(dev, "regulators node not found\n");
-		return -EINVAL;
+		dev_warn(dev, "regulators node not found\n");
+		return 0;
 	}
 
 	ret = of_regulator_match(dev, parent, reg_matches,
@@ -1622,6 +1679,10 @@ static int max77823_charger_parse_dt(struct max77823_charger_data *charger, stru
 					&pdata->boost);
 		ret = of_property_read_u32(np, "restart-threshold-mv",
 					&pdata->restart_threshold_mv);
+		ret = of_property_read_u32(np, "bypass-mv",
+					&pdata->bypass_mv);
+		if (ret)
+			pdata->bypass_mv = 4875;
 
 		if (!pdata->charging_current) {
 			p = of_get_property(np, "battery,input_current_limit", &len);
@@ -1744,7 +1805,7 @@ static int max77823_charger_probe(struct platform_device *pdev)
 	max77823_charger_initialize(charger);
 
 	(void) debugfs_create_file("max77823-regs",
-		S_IRUGO, NULL, (void *)charger, &max77823_debugfs_fops);
+		S_IRUGO | S_IWUSR, NULL, (void *)charger, &max77823_debugfs_fops);
 
 	charger->wqueue =
 	    create_singlethread_workqueue(dev_name(&pdev->dev));
@@ -1800,10 +1861,7 @@ static int max77823_charger_probe(struct platform_device *pdev)
 		goto err_wc_irq;
 	}
 
-	/* Update CHG_CNFG_11 to 0x54(5.1V), boost to 5.1V */
-	max77823_write_reg(charger->i2c,
-		MAX77823_CHG_CNFG_11, 0x54);
-
+	max77823_set_vbypass(charger, charger->pdata->bypass_mv);
 	ret = max77823_read_reg(charger->i2c, MAX77823_CHG_INT_OK);
 	if (ret >= 0) {
 		charger->wc_w_state = (ret & MAX77823_WCIN_OK)

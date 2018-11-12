@@ -28,6 +28,9 @@
 #include "imx-drm.h"
 #include "dcss-crtc.h"
 
+#define TRACE_FLUSH	0
+#define TRACE_VBLANK	1
+
 struct dcss_crtc {
 	struct device *dev;
 	struct drm_crtc		base;
@@ -36,12 +39,13 @@ struct dcss_crtc {
 	struct dcss_plane	*plane[3];
 
 	int			irq;
+	bool			irq_enabled;
 
 	struct drm_property *alpha;
 	struct drm_property *use_global;
 	struct drm_property *dtrc_table_ofs;
 
-	struct completion disable_completion;
+	struct completion en_dis_completion;
 
 	enum dcss_hdr10_nonlinearity opipe_nl;
 	enum dcss_hdr10_gamut opipe_g;
@@ -80,6 +84,9 @@ static void dcss_crtc_reset(struct drm_crtc *crtc)
 static struct drm_crtc_state *dcss_crtc_duplicate_state(struct drm_crtc *crtc)
 {
 	struct imx_crtc_state *state;
+
+	if (!crtc->state)
+		return NULL;
 
 	state = kzalloc(sizeof(*state), GFP_KERNEL);
 	if (!state)
@@ -120,9 +127,6 @@ static int dcss_crtc_atomic_check(struct drm_crtc *crtc,
 static void dcss_crtc_atomic_begin(struct drm_crtc *crtc,
 				   struct drm_crtc_state *old_crtc_state)
 {
-	struct dcss_crtc *dcss_crtc = container_of(crtc, struct dcss_crtc,
-						   base);
-
 	drm_crtc_vblank_on(crtc);
 
 	spin_lock_irq(&crtc->dev->event_lock);
@@ -141,6 +145,8 @@ static void dcss_crtc_atomic_flush(struct drm_crtc *crtc,
 						   base);
 	struct dcss_soc *dcss = dev_get_drvdata(dcss_crtc->dev->parent);
 
+	dcss_trace_module(TRACE_DRM_CRTC, TRACE_FLUSH);
+
 	if (dcss_dtg_is_enabled(dcss))
 		dcss_ctxld_enable(dcss);
 }
@@ -154,19 +160,15 @@ void dcss_crtc_setup_opipe(struct drm_crtc *crtc, struct drm_connector *conn,
 	struct drm_display_info *di = &conn->display_info;
 	int vic;
 
-	if ((colorimetry & HDMI_EXTENDED_COLORIMETRY_BT2020) ||
-	    (colorimetry & HDMI_EXTENDED_COLORIMETRY_BT2020_CONST_LUM))
+	if ((colorimetry & BIT(HDMI_EXTENDED_COLORIMETRY_BT2020)) ||
+	    (colorimetry & BIT(HDMI_EXTENDED_COLORIMETRY_BT2020_CONST_LUM)))
 		dcss_crtc->opipe_g = G_REC2020;
-	else if (colorimetry & HDMI_EXTENDED_COLORIMETRY_ADOBE_RGB)
+	else if (colorimetry & BIT(HDMI_EXTENDED_COLORIMETRY_ADOBE_RGB))
 		dcss_crtc->opipe_g = G_ADOBE_ARGB;
-	else if (colorimetry & HDMI_EXTENDED_COLORIMETRY_XV_YCC_709)
-		dcss_crtc->opipe_g = G_REC709;
 	else
-		dcss_crtc->opipe_g = G_REC601_PAL;
+		dcss_crtc->opipe_g = G_REC709;
 
-	if (eotf & (1 << 3))
-		dcss_crtc->opipe_nl = NL_2100HLG;
-	else if (eotf & (1 << 2))
+	if ((eotf & (1 << 2)) && dcss_crtc->opipe_g == G_REC2020)
 		dcss_crtc->opipe_nl = NL_REC2084;
 	else
 		dcss_crtc->opipe_nl = NL_REC709;
@@ -181,14 +183,14 @@ void dcss_crtc_setup_opipe(struct drm_crtc *crtc, struct drm_connector *conn,
 	/* FIXME: we should get the connector colorspace some other way */
 	if (vic == 97 &&
 	    (di->color_formats & DRM_COLOR_FORMAT_YCRCB420) &&
-	    (di->bpc >= 10))
+	    (di->hdmi.y420_dc_modes & DRM_EDID_YCBCR420_DC_30))
 		dcss_crtc->opipe_pix_format = DRM_FORMAT_P010;
 	else
 		dcss_crtc->opipe_pix_format = DRM_FORMAT_ARGB8888;
 
-	DRM_INFO("OPIPE_CFG: gamut = %d, nl = %d, pr = %d, pix_format = %d\n",
-		 dcss_crtc->opipe_g, dcss_crtc->opipe_nl,
-		 dcss_crtc->opipe_pr, dcss_crtc->opipe_pix_format);
+	DRM_DEBUG_KMS("OPIPE_CFG: gamut = %d, nl = %d, pr = %d, pix_fmt = %d\n",
+		      dcss_crtc->opipe_g, dcss_crtc->opipe_nl,
+		      dcss_crtc->opipe_pr, dcss_crtc->opipe_pix_format);
 }
 
 int dcss_crtc_get_opipe_cfg(struct drm_crtc *crtc,
@@ -205,6 +207,8 @@ int dcss_crtc_get_opipe_cfg(struct drm_crtc *crtc,
 	return 0;
 }
 
+static int dcss_enable_vblank(struct drm_crtc *crtc);
+
 static void dcss_crtc_enable(struct drm_crtc *crtc)
 {
 	struct dcss_crtc *dcss_crtc = container_of(crtc, struct dcss_crtc,
@@ -217,6 +221,8 @@ static void dcss_crtc_enable(struct drm_crtc *crtc)
 
 	pm_runtime_get_sync(dcss_crtc->dev->parent);
 
+	dcss_enable_vblank(crtc);
+
 	dcss_dtg_sync_set(dcss, &vm);
 
 	dcss_ss_subsam_set(dcss, dcss_crtc->opipe_pix_format);
@@ -228,6 +234,10 @@ static void dcss_crtc_enable(struct drm_crtc *crtc)
 	dcss_ss_enable(dcss, true);
 	dcss_dtg_enable(dcss, true, NULL);
 	dcss_ctxld_enable(dcss);
+
+	reinit_completion(&dcss_crtc->en_dis_completion);
+	wait_for_completion_timeout(&dcss_crtc->en_dis_completion,
+				    msecs_to_jiffies(100));
 
 	crtc->enabled = true;
 }
@@ -248,16 +258,17 @@ static void dcss_crtc_atomic_disable(struct drm_crtc *crtc,
 	}
 	spin_unlock_irq(&crtc->dev->event_lock);
 
-	drm_crtc_vblank_off(crtc);
-
 	dcss_ss_enable(dcss, false);
-	dcss_dtg_enable(dcss, false, &dcss_crtc->disable_completion);
+	dcss_dtg_enable(dcss, false, &dcss_crtc->en_dis_completion);
 	dcss_ctxld_enable(dcss);
 
 	crtc->enabled = false;
 
-	wait_for_completion_timeout(&dcss_crtc->disable_completion,
+	reinit_completion(&dcss_crtc->en_dis_completion);
+	wait_for_completion_timeout(&dcss_crtc->en_dis_completion,
 				    msecs_to_jiffies(100));
+
+	drm_crtc_vblank_off(crtc);
 
 	pm_runtime_put_sync(dcss_crtc->dev->parent);
 }
@@ -276,6 +287,13 @@ static int dcss_enable_vblank(struct drm_crtc *crtc)
 						   base);
 	struct dcss_soc *dcss = dev_get_drvdata(dcss_crtc->dev->parent);
 
+	if (dcss_crtc->irq_enabled)
+		return 0;
+
+	dcss_crtc->irq_enabled = true;
+
+	dcss_req_pm_qos(dcss, true);
+
 	dcss_vblank_irq_enable(dcss, true);
 
 	enable_irq(dcss_crtc->irq);
@@ -292,6 +310,10 @@ static void dcss_disable_vblank(struct drm_crtc *crtc)
 	disable_irq_nosync(dcss_crtc->irq);
 
 	dcss_vblank_irq_enable(dcss, false);
+
+	dcss_req_pm_qos(dcss, false);
+
+	dcss_crtc->irq_enabled = false;
 }
 
 static const struct imx_drm_crtc_helper_funcs dcss_crtc_helper_funcs = {
@@ -306,7 +328,12 @@ static irqreturn_t dcss_crtc_irq_handler(int irq, void *dev_id)
 	struct dcss_crtc *dcss_crtc = dev_id;
 	struct dcss_soc *dcss = dev_get_drvdata(dcss_crtc->dev->parent);
 
-	drm_crtc_handle_vblank(&dcss_crtc->base);
+	dcss_trace_module(TRACE_DRM_CRTC, TRACE_VBLANK);
+
+	complete(&dcss_crtc->en_dis_completion);
+
+	if (dcss_ctxld_is_flushed(dcss))
+		drm_crtc_handle_vblank(&dcss_crtc->base);
 
 	dcss_vblank_irq_clear(dcss);
 
@@ -388,7 +415,7 @@ static int dcss_crtc_init(struct dcss_crtc *crtc,
 		return crtc->irq;
 	}
 
-	init_completion(&crtc->disable_completion);
+	init_completion(&crtc->en_dis_completion);
 
 	ret = devm_request_irq(crtc->dev, crtc->irq, dcss_crtc_irq_handler,
 			       IRQF_TRIGGER_RISING, "dcss_drm", crtc);

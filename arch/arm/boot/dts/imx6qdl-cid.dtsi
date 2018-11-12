@@ -81,7 +81,8 @@
 			/* Regulators */
 #define GP_3P7_BYPASS_EN	<&gpio2 18 GPIO_ACTIVE_HIGH>
 			MX6QDL_PAD_EIM_A20__GPIO2_IO18		0x1b0b0
-#define GP_3P7_EN		<&gpio5 11 GPIO_ACTIVE_HIGH>
+/* Active low because used as reset */
+#define GP_3P7_EN		<&gpio5 11 GPIO_ACTIVE_LOW>
 			MX6QDL_PAD_DISP0_DAT17__GPIO5_IO11	0x1b0b0
 			/* TODO Wireless control pins */
 			MX6QDL_PAD_NANDF_ALE__GPIO6_IO08	0x1b0b0
@@ -598,16 +599,19 @@
 		blue {
 			gpios = GP_LED_BLUE;
 			default-state = "off";
+			retain-state-suspended;
 		};
 
 		green {
 			gpios = GP_LED_GREEN;
 			default-state = "off";
+			retain-state-suspended;
 		};
 
 		red {
 			gpios = GP_LED_RED;
 			default-state = "off";
+			retain-state-suspended;
 		};
 
 		vibrator {
@@ -798,7 +802,7 @@
 		type = <5>;     /* WWAN */
 		reset-gpios = GP_MODEM_RESET;
 		pulse-on-gpios = GP_MODEM_PULSE_ON;
-		pulse-duration = <30>;
+		pulse-duration = <40>;
 		status = "okay";
 	};
 };
@@ -1150,6 +1154,7 @@
 	battery,fast_charging_current  = <2100   0  460 2100  460 2100 1000  460   0 1200  900 2100 2100   0 1300  300  700 1300 1800  300   80 2100   0 1000 2800 1000 1000 2100>;
 	battery,full_check_current_1st = <200    0  200  200  200  200  200  200   0  200  200  200  200   0  200  200  200  200  200  200  200  200   0  200  200  200  200  200>;
 	battery,full_check_current_2nd = <2400   0 2400 2400 2400 2400 2400 2400   0 2400 2400 2400 2400   0 2400 2400 2400 2400 2400 2400 2400 2400   0 2400 2400 2400 2400 2400>;
+	bypass-mv = <5100>;
 
 	regulators {
 		reg_usbotg_vbus: otg {
@@ -1301,7 +1306,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_usbh1>;
 	disable-over-current;
-	reset-gpios = GP_USBH1_HUB_RESET;
+	reset-gpios = GP_3P7_EN, GP_USBH1_HUB_RESET;
 	status = "okay";
 	id = <1>;
 	vbus-supply = <&reg_usbh1>;
