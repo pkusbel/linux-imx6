@@ -92,6 +92,10 @@
 		fsl,pins = <
 #define GP_GPIOKEY_POWER	<&gpio1 7 GPIO_ACTIVE_LOW>
 			MX8MQ_IOMUXC_GPIO1_IO07_GPIO1_IO7		0x19
+			//@19labs 
+#define GP_HOME                 <&gpio1 10 GPIO_ACTIVE_LOW>
+			MX8MQ_IOMUXC_GPIO1_IO10_GPIO1_IO10              0x40 
+			//@19labs end
 		>;
 	};
 
@@ -118,7 +122,9 @@
 			/* J17 connector, even */
 			MX8MQ_IOMUXC_SAI3_RXFS_GPIO4_IO28		0x19	/* Pin 44 */
 			MX8MQ_IOMUXC_SAI3_RXC_GPIO4_IO29		0x19	/* Pin 48 */
-			MX8MQ_IOMUXC_GPIO1_IO10_GPIO1_IO10		0x19	/* Pin 50 */
+#if 0 //@19labs, need to use this in the keys driver
+			MX8MQ_IOMUXC_GPIO1_IO10_GPIO1_IO10		0x40    /* Pin 50 */
+#endif //@19labs
 			MX8MQ_IOMUXC_GPIO1_IO03_GPIO1_IO3		0x19	/* Pin 54 */
 			MX8MQ_IOMUXC_GPIO1_IO05_GPIO1_IO5		0x19	/* Pin 56 */
 
@@ -497,7 +503,7 @@
 			MX8MQ_IOMUXC_GPIO1_IO02_WDOG1_WDOG_B	0xc6
 		>;
 	};
-};
+};      		 
 
 / {
 	model = "Boundary Devices i.MX8MQ Nitrogen8M";
@@ -562,6 +568,14 @@
 			linux,code = <KEY_POWER>;
 			gpio-key,wakeup;
 		};
+		//@19labs
+		home {
+			label = "Home";
+			gpios = GP_HOME;
+			linux,code = <KEY_HOMEPAGE>;
+			gpio-key,wakeup;
+		};
+
 	};
 
 	mipi_mclk: mipi-mclk {
