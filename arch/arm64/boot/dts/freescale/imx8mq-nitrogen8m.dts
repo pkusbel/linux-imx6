@@ -913,6 +913,57 @@
 		/* TODO */
 		reg = <0x6a>;
 	};
+
+
+       /* @19labs/nabil: Add tlc59108 LED controller */
+       tlc59108@48 {
+               #address-cells = <1>;
+               #size-cells = <0>;
+               #gpio-cells = <2>;
+               compatible = "ti,tlc59108";
+               reg = <0x48>;
+
+               blue1@0 {
+                       label = "blue1";
+                       reg = <0x0>;
+               };
+
+               green1@1 {
+                       label = "green1";
+                       reg = <0x1>;
+               };
+
+               red1@2 {
+                       label = "red1";
+                       reg = <0x2>;
+               };
+
+               led3@3 {
+                       label = "led3";
+                       reg = <0x3>;
+               };
+
+               blue2@4 {
+                       label = "blue2";
+                       reg = <0x4>;
+               };
+
+               green2@5 {
+                       label = "green2";
+                       reg = <0x5>;
+               };
+
+               red2@6 {
+                       label = "red2";
+                       reg = <0x6>;
+               };
+
+               led7@7 {
+                       label = "led7";
+                       reg = <0x7>;
+               };
+       };
+       /* @19labs/nabil: end */
 };
 
 &i2c3 {
